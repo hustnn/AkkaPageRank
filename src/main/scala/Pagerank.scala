@@ -7,6 +7,7 @@ import scala.concurrent.{Future,Await}
 import akka.pattern.ask
 import akka.util._
 import scala.concurrent.duration._
+import scala.collection.mutable
 
 // The messages between vertices
 case class InitializeVertex(rankVal: Double, neighbors: List[ActorRef])
@@ -30,7 +31,7 @@ object Pagerank {
     // construct the graph from the source file
     // format: a list of (from vertex id, List(to vertex id)) pair
     val graph: List[(String, List[String])] =
-      io.Source.fromFile(inputGraphFile).getLines
+      io.Source.fromFile(inputGraphFile).getLines.drop(4)
         .map(_.split("\t").toList)
         .map(vertices => (vertices(0), vertices(1)))
         .toList
@@ -38,9 +39,15 @@ object Pagerank {
         .map { case (k, v) => (k, v.map(_._2))}
         .toList
 
+    val allToVertices =
+      io.Source.fromFile(inputGraphFile).getLines.drop(4)
+        .map(_.split("\t").toList)
+        .map(vertices => vertices(1)).toList.distinct
+
     val numVertices = graph.length
     val uniformProbability = 1.0 / numVertices
-    val uniformJumpFactor = jumpFactor / numVertices
+    //val uniformJumpFactor = jumpFactor / numVertices
+    val uniformJumpFactor = jumpFactor
 
     val system = ActorSystem("PageRankApp")
     import system.dispatcher
@@ -49,15 +56,25 @@ object Pagerank {
     // put them into a map, indexed by vertex id
     val vertexActors = graph.map {
       case (vertexId, _) =>
-        println(vertexId)
         (vertexId, system.actorOf(Props[Vertex], vertexId))
     }.toMap
+
+    val vertexActorsMutable = mutable.Map[String, ActorRef]() ++= vertexActors
+
+    for (vertexId <- allToVertices) {
+      vertexActorsMutable.get(vertexId) match {
+        case Some(e) => ;
+        case None => vertexActorsMutable.put(vertexId, system.actorOf(Props[Vertex], vertexId))
+      }
+    }
+
+    println("start initialize the node")
 
     // Set neighbors for each vertex
     val readyFutures: Seq[Future[Boolean]] =
       for ((vertexId, neighborList) <- graph) yield {
-        val vertex = vertexActors(vertexId)
-        val neighbors = neighborList.map(vertexActors)
+        val vertex = vertexActorsMutable(vertexId)
+        val neighbors = neighborList.map(vertexActorsMutable)
         (vertex ? InitializeVertex(uniformProbability, neighbors)).mapTo[Boolean]
       }
 
@@ -65,7 +82,7 @@ object Pagerank {
     val allReadyFuture: Future[Boolean] =
       Future.reduce(readyFutures)(_ && _)
 
-    val ready = Await.result(allReadyFuture, 10 seconds)
+    val ready = Await.result(allReadyFuture, 50 seconds)
 
     // The list of vertex actors
     val vertices = vertexActors.values.toList
@@ -73,13 +90,18 @@ object Pagerank {
     var done = false
     var currentIteration = 1
 
+    println("start page rank computing")
+    val s = System.nanoTime()
+
     while (!done) {
 
       // Tell all vertices to spread the page rank values
-      val rankValueFuture: Future[Seq[Double]] =
+      val rankValueFuture: Future[Double] =
         Future.traverse(vertices) {
           v => (v ? SpreadRankValue).mapTo[Double]
-        }
+        }.map(_.sum)
+
+      val totalSpreadValue = Await.result(rankValueFuture, 50 seconds)
 
       // Tell all vertices to update their pagerank values
       // PR(A) = d + (1 - d) (PR(T1)/C(T1) + ... + PR(Tn)/C(Tn))
@@ -90,7 +112,7 @@ object Pagerank {
           v => (v ? updateValues).mapTo[Double]
         }
 
-      val averageDiff = Await.result(diffsFuture.map(_.sum / numVertices), 10 seconds)
+      val averageDiff = Await.result(diffsFuture.map(_.sum / numVertices), 50 seconds)
 
       println("Iterations == " + currentIteration + ", average diff == " + averageDiff)
 
@@ -115,6 +137,7 @@ object Pagerank {
       }
     }
 
+    println("time: "+(System.nanoTime - s)/1e6+"ms")
     system.terminate()
   }
 
