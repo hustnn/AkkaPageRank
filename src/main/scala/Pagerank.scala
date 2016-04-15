@@ -2,21 +2,30 @@
   * Created by zhaojie on 4/13/16.
   */
 
-import akka.actor.{Props, ActorSystem, Actor, ActorRef}
+import akka.actor.{Props, ActorSystem, ActorRef}
 import scala.concurrent.{Future,Await}
 import akka.pattern.ask
 import akka.util._
 import scala.concurrent.duration._
 
+// The messages between vertices
+case class InitializeVertex(rankVal: Double, neighbors: List[ActorRef])
+object SpreadRankValue
+case class Update(uniformJumpFactor: Double, jumpFactor: Double)
+case class contributeRankValue(rankValue: Double)
+object GetRankValue
+
+
 object Pagerank {
-
-  // The messages between vertices
-  case class InitializeVertex(rankVal: Double, neighbors: List[ActorRef])
-
+  implicit val timeout = Timeout(10 seconds) // needed for `?` below
 
   def main (args: Array[String]): Unit = {
 
     val inputGraphFile = args(0)
+    val jumpFactor = if (args.length > 1) args(1).toDouble else 0.15
+    val topX = if (args.length > 2) args(2).toInt else 10
+    val maxIters = 50
+    val diffTolerance = 1E-6
 
     // construct the graph from the source file
     // format: a list of (from vertex id, List(to vertex id)) pair
@@ -29,17 +38,18 @@ object Pagerank {
         .map { case (k, v) => (k, v.map(_._2))}
         .toList
 
-    println(graph)
-
     val numVertices = graph.length
     val uniformProbability = 1.0 / numVertices
+    val uniformJumpFactor = jumpFactor / numVertices
 
     val system = ActorSystem("PageRankApp")
+    import system.dispatcher
 
     // Create the vertex actors,
     // put them into a map, indexed by vertex id
     val vertexActors = graph.map {
       case (vertexId, _) =>
+        println(vertexId)
         (vertexId, system.actorOf(Props[Vertex], vertexId))
     }.toMap
 
@@ -66,8 +76,46 @@ object Pagerank {
     while (!done) {
 
       // Tell all vertices to spread the page rank values
+      val rankValueFuture: Future[Seq[Double]] =
+        Future.traverse(vertices) {
+          v => (v ? SpreadRankValue).mapTo[Double]
+        }
+
+      // Tell all vertices to update their pagerank values
+      // PR(A) = d + (1 - d) (PR(T1)/C(T1) + ... + PR(Tn)/C(Tn))
+      val updateValues = Update(uniformJumpFactor, jumpFactor)
+
+      val diffsFuture: Future[Seq[Double]] =
+        Future.traverse(vertices) {
+          v => (v ? updateValues).mapTo[Double]
+        }
+
+      val averageDiff = Await.result(diffsFuture.map(_.sum / numVertices), 10 seconds)
+
+      println("Iterations == " + currentIteration + ", average diff == " + averageDiff)
+
+      currentIteration += 1
+
+      if (currentIteration > maxIters || averageDiff < diffTolerance) {
+        done = true
+
+        // Output ten X ranked vertices
+        val pagerankFutures: Future[Seq[(String, Double)]] =
+          Future.traverse(vertices) {
+            v => (v ? GetRankValue).mapTo[(String, Double)]
+          }
+
+        pagerankFutures.foreach {
+          pageranks => {
+            val topVertices = pageranks.sortBy(-_._2).take(topX)
+            for ((id, rankValue) <- topVertices)
+              println(id + "\t" + rankValue)
+          }
+        }
+      }
     }
 
+    system.terminate()
   }
 
 }
