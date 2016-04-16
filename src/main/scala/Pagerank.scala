@@ -30,6 +30,7 @@ object Pagerank {
 
     // construct the graph from the source file
     // format: a list of (from vertex id, List(to vertex id)) pair
+    println("start load graph from file")
     val graph: List[(String, List[String])] =
       io.Source.fromFile(inputGraphFile).getLines.drop(4)
         .map(_.split("\t").toList)
@@ -52,6 +53,8 @@ object Pagerank {
     val system = ActorSystem("PageRankApp")
     import system.dispatcher
 
+    println("start initialize the node")
+
     // Create the vertex actors,
     // put them into a map, indexed by vertex id
     val vertexActors = graph.map {
@@ -67,8 +70,6 @@ object Pagerank {
         case None => vertexActorsMutable.put(vertexId, system.actorOf(Props[Vertex], vertexId))
       }
     }
-
-    println("start initialize the node")
 
     // Set neighbors for each vertex
     val readyFutures: Seq[Future[Boolean]] =
@@ -137,7 +138,7 @@ object Pagerank {
       }
     }
 
-    println("time: "+(System.nanoTime - s)/1e6+"ms")
+    println("time: "+(System.nanoTime - s)/1e9+"s")
     system.terminate()
   }
 
