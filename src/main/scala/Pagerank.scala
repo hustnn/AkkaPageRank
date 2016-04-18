@@ -26,7 +26,7 @@ object Pagerank {
     val jumpFactor = if (args.length > 1) args(1).toDouble else 0.15
     val topX = if (args.length > 2) args(2).toInt else 10
     val maxIters = 50
-    val diffTolerance = 1E-6
+    val diffTolerance = 1E-4
 
     // construct the graph from the source file
     // format: a list of (from vertex id, List(to vertex id)) pair
