@@ -1,4 +1,4 @@
-package Incremental
+package FastPagerank
 
 import akka.actor.{Props, ActorSystem, ActorRef}
 import scala.concurrent.{Future,Await}
@@ -8,17 +8,18 @@ import scala.concurrent.duration._
 import scala.collection.mutable
 
 /**
- * Created by nn on 4/17/2016.
- */
+  * Created by zhaojie on 4/18/16.
+  */
+
 
 // The messages between vertices
 case class InitializeVertex(rankVal: Double, neighbors: List[ActorRef])
 object SpreadRankValue
 case class Update(uniformJumpFactor: Double, jumpFactor: Double)
-case class contributeRankValue(actorId: String, rankValue: Double)
+case class contributeRankValue(rankValue: Double)
 object GetRankValue
 
-object IncrementalPagerank {
+object DeltaPagerank {
   implicit val timeout = Timeout(10 seconds) // needed for `?` below
 
   def main (args: Array[String]): Unit = {
@@ -48,6 +49,7 @@ object IncrementalPagerank {
 
     val numVertices = graph.length
     val uniformProbability = 1.0 / numVertices
+    //val uniformJumpFactor = jumpFactor / numVertices
     val uniformJumpFactor = jumpFactor
 
     val system = ActorSystem("PageRankApp")
@@ -59,7 +61,7 @@ object IncrementalPagerank {
     // put them into a map, indexed by vertex id
     val vertexActors = graph.map {
       case (vertexId, _) =>
-        (vertexId, system.actorOf(Props[IncrementalVertex], vertexId))
+        (vertexId, system.actorOf(Props[DeltaVertex], vertexId))
     }.toMap
 
     val vertexActorsMutable = mutable.Map[String, ActorRef]() ++= vertexActors
@@ -67,7 +69,7 @@ object IncrementalPagerank {
     for (vertexId <- allToVertices) {
       vertexActorsMutable.get(vertexId) match {
         case Some(e) => ;
-        case None => vertexActorsMutable.put(vertexId, system.actorOf(Props[IncrementalVertex], vertexId))
+        case None => vertexActorsMutable.put(vertexId, system.actorOf(Props[DeltaVertex], vertexId))
       }
     }
 
