@@ -28,7 +28,7 @@ object DeltaPagerank {
     val jumpFactor = if (args.length > 1) args(1).toDouble else 0.15
     val topX = if (args.length > 2) args(2).toInt else 10
     val maxIters = 50
-    val diffTolerance = 1E-6
+    val diffTolerance = 1E-4
 
     // construct the graph from the source file
     // format: a list of (from vertex id, List(to vertex id)) pair
@@ -73,6 +73,11 @@ object DeltaPagerank {
       }
     }
 
+    /*val vertexDiffMap = mutable.Map[String, Boolean]()
+    vertexActorsMutable.keys.foreach( vertex =>
+      vertexDiffMap += vertex -> true
+    )*/
+
     // Set neighbors for each vertex
     val readyFutures: Seq[Future[Boolean]] =
       for ((vertexId, neighborList) <- graph) yield {
@@ -88,7 +93,8 @@ object DeltaPagerank {
     val ready = Await.result(allReadyFuture, 10 seconds)
 
     // The list of vertex actors
-    val vertices = vertexActors.values.toList
+    //val vertices = vertexActorsMutable.values.toList
+    val vertices = vertexActorsMutable.values.toList
 
     var done = false
     var currentIteration = 1
@@ -96,13 +102,24 @@ object DeltaPagerank {
     println("start page rank computing")
     val s = System.nanoTime()
 
+    val diffVertices = scala.collection.mutable.ListBuffer(vertices: _*)
+    val convergeDiffs = scala.collection.mutable.ListBuffer.empty[Double]
+
     while (!done) {
 
       // Tell all vertices to spread the page rank values
+     /* val diffVertices = scala.collection.mutable.ListBuffer.empty[ActorRef]
+      vertexActorsMutable foreach {case (k, v) => if(vertexDiffMap.get(k) != Some(false)) diffVertices += v}*/
+
       val rankValueFuture: Future[Double] =
-        Future.traverse(vertices) {
+        Future.traverse(diffVertices) {
           v => (v ? SpreadRankValue).mapTo[Double]
         }.map(_.sum)
+
+      /*val rankValueFuture: Future[Double] =
+        Future.traverse(vertexActorsMutable) match {
+          case (k, v) => if (vertexDiffMap.getOrElse(k, false)) (v ? SpreadRankValue).mapTo[Double]
+        }*/
 
       val totalSpreadValue = Await.result(rankValueFuture, 10 seconds)
 
@@ -110,14 +127,32 @@ object DeltaPagerank {
       // PR(A) = d + (1 - d) (PR(T1)/C(T1) + ... + PR(Tn)/C(Tn))
       val updateValues = Update(uniformJumpFactor, jumpFactor)
 
-      val diffsFuture: Future[Seq[Double]] =
-        Future.traverse(vertices) {
-          v => (v ? updateValues).mapTo[Double]
+      val diffsFuture: Future[Seq[(String, Double)]] =
+        Future.traverse(diffVertices) {
+          v => (v ? updateValues).mapTo[(String, Double)]
         }
 
-      val averageDiff = Await.result(diffsFuture.map(_.sum / numVertices), 10 seconds)
+      //val averageDiff = Await.result(diffsFuture.map(_.sum / numVertices), 10 seconds)
+      val vertexDiff = Await.result(diffsFuture, 10 seconds)
+      var aggregateDiff = 0.0
+      diffVertices.clear()
+      for ((vertexId, diff) <- vertexDiff) {
+        if (diff > 0) {
+          //vertexDiffMap.update(vertexId, true)
+          vertexActorsMutable.get(vertexId) match {
+            case Some(e) => diffVertices += e
+            case None => ;
+          }
+          aggregateDiff += diff
+        }
+        else {
+          convergeDiffs += diff
+        }
+      }
 
-      println("Iterations == " + currentIteration + ", average diff == " + averageDiff)
+      aggregateDiff += convergeDiffs.sum
+      val averageDiff = aggregateDiff / numVertices
+      println("Iterations == " + currentIteration + ", average diff == " + averageDiff + ", non converage nodes == " + diffVertices.length)
 
       currentIteration += 1
 

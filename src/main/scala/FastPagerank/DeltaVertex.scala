@@ -15,6 +15,7 @@ class DeltaVertex extends Actor {
   var ownDeltaRankValue = 0.0
   var firstIteration = true
   val id = self.path.name
+  val diffTolerance = 1E-4
 
   def receive = {
 
@@ -35,7 +36,7 @@ class DeltaVertex extends Actor {
         sender ! amountPerNeighbor
       }
       else {
-        if (ownDeltaRankValue != 0) {
+        if (math.abs(ownDeltaRankValue) > diffTolerance) {
           val incrementalAmoutPerNeighbor = ownDeltaRankValue / outDegree
           neighbors.foreach(_ ! contributeRankValue(incrementalAmoutPerNeighbor))
           sender ! incrementalAmoutPerNeighbor
@@ -62,16 +63,16 @@ class DeltaVertex extends Actor {
         val diff = math.abs(pagerank - updatedPageRank)
         ownDeltaRankValue = diff
         pagerank = updatedPageRank
-        sender ! diff
+        firstIteration = false
+        receivedRankValue = 0
+        sender ! (id, diff)
       }
       else {
         ownDeltaRankValue = (1 - jumpFactor) * receivedDeltaRankValue
         pagerank += ownDeltaRankValue
         val diff = math.abs(ownDeltaRankValue)
-        sender ! diff
+        receivedDeltaRankValue = 0
+        sender ! (id, diff)
       }
-      receivedDeltaRankValue = 0
-      receivedRankValue = 0
-      firstIteration = false
   }
 }
