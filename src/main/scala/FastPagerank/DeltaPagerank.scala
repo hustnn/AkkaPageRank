@@ -27,20 +27,21 @@ object DeltaPagerank {
     val inputGraphFile = args(0)
     val jumpFactor = if (args.length > 1) args(1).toDouble else 0.15
     val topX = if (args.length > 2) args(2).toInt else 10
-    val maxIters = 100
-    val diffTolerance = 1E-6
+    val maxIters = 200
+    val diffTolerance = 1E-8
 
     // construct the graph from the source file
     // format: a list of (from vertex id, List(to vertex id)) pair
     println("start load graph from file")
-    val graph: List[(String, List[String])] =
+    val graphMapping: Map[String, List[String]] =
       io.Source.fromFile(inputGraphFile).getLines.drop(4)
         .map(_.split("\t").toList)
         .map(vertices => (vertices(0), vertices(1)))
         .toList
         .groupBy(w => w._1)
         .map { case (k, v) => (k, v.map(_._2))}
-        .toList
+
+    val graph: List[(String, List[String])] = graphMapping.toList
 
     val allToVertices =
       io.Source.fromFile(inputGraphFile).getLines.drop(4)
@@ -100,10 +101,15 @@ object DeltaPagerank {
     var currentIteration = 1
 
     println("start page rank computing")
-    val s = System.nanoTime()
+
 
     val diffVertices = scala.collection.mutable.ListBuffer(vertices: _*)
+    var converagedVerticesAggregatedDiff = 0.0
+    //val activeVertices = mutable.Map[String, ActorRef]() ++= vertexActorsMutable
     //val convergeDiffs = scala.collection.mutable.ListBuffer.empty[Double]
+    //val inactiveVertices = mutable.Map[String, (ActorRef, Double)]()
+
+    val s = System.nanoTime()
 
     // delta optimizations: one node only records the changes (delta) of the rank value of incoming nodes
     // if the rank value of the node keeps unchange, then don't spread its value
@@ -132,37 +138,53 @@ object DeltaPagerank {
 
       // update for partial nodes: diffVertices or for all node: vertices
       val diffsFuture: Future[Seq[(String, Double)]] =
-        Future.traverse(vertices) {
+        Future.traverse(diffVertices) {
           v => (v ? updateValues).mapTo[(String, Double)]
         }
 
       //val averageDiff = Await.result(diffsFuture.map(_.sum / numVertices), 10 seconds)
       val vertexDiff = Await.result(diffsFuture, 10 seconds)
-      var aggregateDiff = 0.0
+      var activeAggregateDiff = 0.0
 
       diffVertices.clear()
 
       for ((vertexId, diff) <- vertexDiff) {
         if (diff > diffTolerance) {
-          //vertexDiffMap.update(vertexId, true)
           vertexActorsMutable.get(vertexId) match {
-            case Some(e) => diffVertices += e
+            case Some(e) =>
+              activeAggregateDiff += diff
+              diffVertices += e
             case None => ;
           }
         }
-        aggregateDiff += diff
-        //else {
-        //  convergeDiffs += diff
-        //}
+        else
+          converagedVerticesAggregatedDiff += diff
       }
 
-      val averageDiff = aggregateDiff / numVertices
-      println("Iterations == " + currentIteration + ", average diff == " + averageDiff + ", non converage nodes == " + diffVertices.length)
+      //val averageDiff = (activeAggregateDiff + inactiveVertices.values.map(_._2).sum) / numVertices
+      val averageDiff = (activeAggregateDiff + converagedVerticesAggregatedDiff) / numVertices
+
+      // find the neighbors of this active node, active them if they are not active
+      /*for (neighbor <- graphMapping.getOrElse(vertexId, List[String]())) {
+        inactiveVertices.get(neighbor) match {
+          case Some(n) =>
+            activeVertices.put(neighbor, n._1)
+            activeAggregateDiff += n._2
+            inactiveVertices.remove(neighbor)
+          case None => ;
+        }
+      }*/
+
+      //println("Iterations == " + currentIteration + ", average diff == " + averageDiff +
+      //  ", changed node ==" + diffVertices.size + ", active nodes == " + activeVertices.size)
 
       currentIteration += 1
 
       if (currentIteration > maxIters || averageDiff < diffTolerance) {
         done = true
+
+        // finish
+        println("time: "+(System.nanoTime - s)/1e9+"s" + ", current iterations == " + currentIteration)
 
         // Output ten X ranked vertices
         val pagerankFutures: Future[Seq[(String, Double)]] =
@@ -180,7 +202,6 @@ object DeltaPagerank {
       }
     }
 
-    println("time: "+(System.nanoTime - s)/1e9+"s")
     system.terminate()
   }
 }

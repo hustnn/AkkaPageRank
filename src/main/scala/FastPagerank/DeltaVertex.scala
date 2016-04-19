@@ -15,7 +15,7 @@ class DeltaVertex extends Actor {
   var ownDeltaRankValue = 0.0
   var firstIteration = true
   val id = self.path.name
-  val diffTolerance = 1E-6
+  val diffTolerance = 1E-8
 
   def receive = {
 

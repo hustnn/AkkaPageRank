@@ -25,8 +25,8 @@ object Pagerank {
     val inputGraphFile = args(0)
     val jumpFactor = if (args.length > 1) args(1).toDouble else 0.15
     val topX = if (args.length > 2) args(2).toInt else 10
-    val maxIters = 100
-    val diffTolerance = 1E-6
+    val maxIters = 200
+    val diffTolerance = 1E-5
 
     // construct the graph from the source file
     // format: a list of (from vertex id, List(to vertex id)) pair
@@ -115,12 +115,17 @@ object Pagerank {
 
       val averageDiff = Await.result(diffsFuture.map(_.sum / numVertices), 10 seconds)
 
-      println("Iterations == " + currentIteration + ", average diff == " + averageDiff)
+      //println("Iterations == " + currentIteration + ", average diff == " + averageDiff)
+      //println("Iterations == " + currentIteration + ", average diff == " + averageDiff +
+      //  ", changed node ==" + vertices.size + ", active nodes == " + vertices.size)
 
       currentIteration += 1
 
       if (currentIteration > maxIters || averageDiff < diffTolerance) {
         done = true
+
+        // finish
+        println("time: "+(System.nanoTime - s)/1e9+"s" + ", current iterations == " + currentIteration)
 
         // Output ten X ranked vertices
         val pagerankFutures: Future[Seq[(String, Double)]] =
@@ -138,7 +143,6 @@ object Pagerank {
       }
     }
 
-    println("time: "+(System.nanoTime - s)/1e9+"s")
     system.terminate()
   }
 
