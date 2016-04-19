@@ -1,1 +1,5 @@
 naive implementation (synthronous without incremental): 360 second in my home machine
+
+lab machine:
+fast: 164 second
+naive: 128 second
