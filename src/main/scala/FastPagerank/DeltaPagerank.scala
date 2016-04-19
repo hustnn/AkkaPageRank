@@ -27,8 +27,8 @@ object DeltaPagerank {
     val inputGraphFile = args(0)
     val jumpFactor = if (args.length > 1) args(1).toDouble else 0.15
     val topX = if (args.length > 2) args(2).toInt else 10
-    val maxIters = 50
-    val diffTolerance = 1E-4
+    val maxIters = 100
+    val diffTolerance = 1E-6
 
     // construct the graph from the source file
     // format: a list of (from vertex id, List(to vertex id)) pair
@@ -73,6 +73,7 @@ object DeltaPagerank {
       }
     }
 
+    // don't use this map due to this map needs to be updated and looked up frequently
     /*val vertexDiffMap = mutable.Map[String, Boolean]()
     vertexActorsMutable.keys.foreach( vertex =>
       vertexDiffMap += vertex -> true
@@ -93,7 +94,6 @@ object DeltaPagerank {
     val ready = Await.result(allReadyFuture, 10 seconds)
 
     // The list of vertex actors
-    //val vertices = vertexActorsMutable.values.toList
     val vertices = vertexActorsMutable.values.toList
 
     var done = false
@@ -103,8 +103,11 @@ object DeltaPagerank {
     val s = System.nanoTime()
 
     val diffVertices = scala.collection.mutable.ListBuffer(vertices: _*)
-    val convergeDiffs = scala.collection.mutable.ListBuffer.empty[Double]
+    //val convergeDiffs = scala.collection.mutable.ListBuffer.empty[Double]
 
+    // delta optimizations: one node only records the changes (delta) of the rank value of incoming nodes
+    // if the rank value of the node keeps unchange, then don't spread its value
+    // if the rank value already converge, remove it for synchronization to remove unnecessary overhead
     while (!done) {
 
       // Tell all vertices to spread the page rank values
@@ -127,30 +130,32 @@ object DeltaPagerank {
       // PR(A) = d + (1 - d) (PR(T1)/C(T1) + ... + PR(Tn)/C(Tn))
       val updateValues = Update(uniformJumpFactor, jumpFactor)
 
+      // update for partial nodes: diffVertices or for all node: vertices
       val diffsFuture: Future[Seq[(String, Double)]] =
-        Future.traverse(diffVertices) {
+        Future.traverse(vertices) {
           v => (v ? updateValues).mapTo[(String, Double)]
         }
 
       //val averageDiff = Await.result(diffsFuture.map(_.sum / numVertices), 10 seconds)
       val vertexDiff = Await.result(diffsFuture, 10 seconds)
       var aggregateDiff = 0.0
+
       diffVertices.clear()
+
       for ((vertexId, diff) <- vertexDiff) {
-        if (diff > 0) {
+        if (diff > diffTolerance) {
           //vertexDiffMap.update(vertexId, true)
           vertexActorsMutable.get(vertexId) match {
             case Some(e) => diffVertices += e
             case None => ;
           }
-          aggregateDiff += diff
         }
-        else {
-          convergeDiffs += diff
-        }
+        aggregateDiff += diff
+        //else {
+        //  convergeDiffs += diff
+        //}
       }
 
-      aggregateDiff += convergeDiffs.sum
       val averageDiff = aggregateDiff / numVertices
       println("Iterations == " + currentIteration + ", average diff == " + averageDiff + ", non converage nodes == " + diffVertices.length)
 
